@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <title>Promotion Dashboard</title>
+    <style>
+        body {
+            background: #eee;
+            overflow-y: scroll;
+            font-family: Arial, sans-serif;
+        }
+
+        #charts {
+            display: flex;
+            width: 100%;
+            margin-bottom: 0px; 
+        }
+
+        #scatterPlot {
+            margin: 5px; 
+            flex: 1 1 80%; 
+            margin-bottom: 0px; 
+        }
+
+        #donutChart {
+            margin: 5px; 
+            flex: 1 1 20%; 
+            margin-bottom: 0px; 
+        }
+
+        #donutSvgContainer {
+            margin-left: +45px;
+            margin-top: 10px;
+        }
+
+        #table {
+            margin: 5px; 
+            width: 95%;
+            margin-top: 0px; 
+        }
+
+        .scatter-dot, .cell {
+            fill: none;
+            stroke: steelblue;
+            stroke-width: 2px;
+        }
+
+        .axis-label {
+            font-size: 14px;
+            text-anchor: middle;
+        }
+
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            width: auto;
+            height: auto;
+            padding: 5px;
+            font: 12px sans-serif;
+            background: lightsteelblue;
+            border: 0px;
+            border-radius: 8px;
+            pointer-events: none;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            table-layout: fixed;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+        }
+
+        th {
+            background-color: #f2f2f2;
+            cursor: pointer;
+        }
+
+        th .sort-arrow {
+            display: inline-block;
+            margin-left: 10px;
+        }
+
+        select {
+            width: 50%;
+            padding: 8px;
+            margin-bottom: 10px;
+        }
+
+        h1 {
+            position: relative;
+            top: 0;
+            left: 0;
+            font-size: 28px;
+            color: #333;
+            font-family: 'Helvetica', sans-serif;
+            margin: 15px 0;
+            display: inline-block;
+            border-bottom: 3px solid #006400;
+            padding-bottom: 5px;
+        }
+
+        h2, h3 {
+            color: #666;
+            font-family: 'Helvetica', sans-serif;
+            margin-top: 15;
+            font-size: 20px;
+        }
+
+        h4 {
+            color: #666;
+            font-family: 'Helvetica', sans-serif;
+            margin-top: 0;
+            font-size: 20px;
+        }
+
+        #filterDiv {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            margin-bottom: 0px;
+            width: auto;
+        }
+
+        .table-container {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .roi-line {
+            stroke: #000;
+            stroke-width: 1;
+            stroke-dasharray: 5, 5;
+        }
+
+        tr:hover {
+            background-color: #f8f8f8;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Promotion Dashboard</h1>
+    <div id="charts">
+        <div id="scatterPlotContainer">
+            <h2>Coupon Promotion ROI</h2>
+            <div id="scatterPlot"></div>
+        </div>
+        <div id="donutChartContainer">
+            <h3>Coupon Usage Status</h3>
+            <div id="donutChart">
+                <div id="filterDiv">
+                    <label for="couponCodeFilter">쿠폰코드: </label>
+                    <select id="couponCodeFilter">
+                        <option value="">전체</option>
+                    </select>
+                </div>
+                <div id="donutSvgContainer"></div>
+            </div>
+        </div>
+    </div>
+    <h3>Coupon Promotion List</h3>
+    <div id="table" class="table-container"></div>
+
+    <script>
+        const csvUrl = "https://leahrhee.github.io/ds/df2_vF.csv";
+
+        // filter & process data function
+        function processData(data) {
+            data.forEach(d => {
+                d.ROI = +d.ROI;
+            });
+
+            return data;
+        }
+
+        function processCouponStatusData(data, filterCouponCode) {
+            const filteredData = filterCouponCode ? data.filter(d => d.쿠폰코드 === filterCouponCode) : data;
+            const groupedData = d3.rollups(
+                filteredData,
+                v => v.length,
+                d => d.쿠폰상태
+            ).map(([쿠폰상태, count]) => ({ 쿠폰상태, count }));
+
+            return groupedData;
+        }
+
+        // dimensions & margins
+        const margin = { top: 20, right: 40, bottom: 65, left: 50 },
+              width = 900 - margin.left - margin.right,
+              height = 400 - margin.top - margin.bottom,
+              radius = Math.min(width, height) / 2;
+
+        const svg = d3.select("#scatterPlot")
+            .append("svg")
+            .attr("width", width + margin.left + margin.right)
+            .attr("height", height + margin.top + margin.bottom)
+            .append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        const donutSvg = d3.select("#donutSvgContainer")
+            .append("svg")
+            .attr("width", 400)
+            .attr("height", height + margin.top + margin.bottom)
+            .append("g")
+            .attr("transform", `translate(200,${height / 2})`);
+
+        // data load
+        d3.csv(csvUrl).then(function(data) {
+            const processedData = processData(data);
+            const couponStatusData = processCouponStatusData(data);
+
+            // scatter plot
+            const x = d3.scaleBand()
+                .domain(processedData.map(d => d.쿠폰코드).sort())
+                .range([0, width])
+                .padding(0.1);
+
+            const y = d3.scaleLinear()
+                .domain([0, d3.max(processedData, d => d.ROI)])
+                .nice()
+                .range([height, 0]);
+
+            // ROI_구간별 line 추가
+            const roiLines = [2, 8, 15];
+
+            svg.selectAll(".roi-line")
+                .data(roiLines)
+                .enter()
+                .append("line")
+                .attr("class", "roi-line")
+                .attr("x1", 0)
+                .attr("x2", width)
+                .attr("y1", d => y(d))
+                .attr("y2", d => y(d));
+
+            // x-axis 
+            svg.append("g")
+                .attr("transform", `translate(0,${height})`)
+                .call(d3.axisBottom(x))
+                .selectAll("text")
+                .attr("transform", "rotate(-45)")
+                .style("text-anchor", "end");
+
+            // y-axis 
+            svg.append("g")
+                .call(d3.axisLeft(y));
+
+            // data points
+            const dots = svg.selectAll(".scatter-dot")
+                .data(processedData)
+                .enter()
+                .append("circle")
+                .attr("class", "scatter-dot")
+                .attr("cx", d => x(d.쿠폰코드) + x.bandwidth() / 2)
+                .attr("cy", d => y(d.ROI))
+                .attr("r", 5)
+                .attr("fill", "none")
+                .attr("stroke", "steelblue")
+                .attr("stroke-width", 2);
+
+            // x-axis label
+            svg.append("text")
+                .attr("class", "axis-label")
+                .attr("x", width / 2)
+                .attr("y", height + margin.bottom - 1)
+                .text("쿠폰코드");
+
+            // y-axis label
+            svg.append("text")
+                .attr("class", "axis-label")
+                .attr("transform", "rotate(-90)")
+                .attr("x", -height / 2)
+                .attr("y", -margin.left + 15)
+                .text("ROI");
+
+            // Tooltip 
+            const tooltip = d3.select("body").append("div")
+                .attr("class", "tooltip")
+                .style("opacity", 0);
+
+            // Add brush
+            const brush = d3.brush()
+                .extent([[0, 0], [width, height]])
+                .on("brush end", brushed);
+
+            svg.append("g")
+                .attr("class", "brush")
+                .call(brush);
+
+            function brushed(event) {
+                const selection = event.selection;
+                if (selection) {
+                    const [[x0, y0], [x1, y1]] = selection;
+                    const selectedData = processedData.filter(d =>
+                        x(d.쿠폰코드) + x.bandwidth() / 2 >= x0 &&
+                        x(d.쿠폰코드) + x.bandwidth() / 2 <= x1 &&
+                        y(d.ROI) >= y0 &&
+                        y(d.ROI) <= y1
+                    );
+                    updateTable(selectedData);
+                    updateCouponCodeFilter(selectedData);
+                } else {
+                    updateCouponCodeFilter(processedData);
+                }
+            }
+
+            // brushed data 결과에 따른 coupon code filter 업데이트
+            function updateCouponCodeFilter(filteredData) {
+                const couponCodes = [...new Set(filteredData.map(d => d.쿠폰코드))];
+                const couponCodeFilter = d3.select("#couponCodeFilter");
+                
+                couponCodeFilter.selectAll("option")
+                    .data(["", ...couponCodes])
+                    .join("option")
+                    .text(d => d)
+                    .attr("value", d => d);
+
+                // event 발생 시 donut chart 업데이트
+                couponCodeFilter.dispatch("change");
+            }
+
+            // donut chart
+            const pie = d3.pie()
+                .value(d => d.count)
+                .sort(null);
+
+            const arc = d3.arc()
+                .innerRadius(radius * 0.5)
+                .outerRadius(radius * 0.8);
+
+            const outerArc = d3.arc()
+                .innerRadius(radius * 0.9)
+                .outerRadius(radius * 0.9);
+
+            const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+            function updateDonutChart(filterCouponCode) {
+                const couponStatusData = processCouponStatusData(data, filterCouponCode);
+                const total = d3.sum(couponStatusData, d => d.count);
+
+                const arcs = donutSvg.selectAll(".arc")
+                    .data(pie(couponStatusData));
+
+                const arcEnter = arcs.enter()
+                    .append("g")
+                    .attr("class", "arc");
+
+                arcEnter.append("path")
+                    .attr("d", arc)
+                    .attr("fill", d => color(d.data.쿠폰상태))
+                    .on("mouseover", function(event, d) {
+                        tooltip.transition()
+                            .duration(200)
+                            .style("opacity", .9);
+                        tooltip.html(`쿠폰상태: ${d.data.쿠폰상태}<br>Count: ${d.data.count}<br>비율: ${(d.data.count / total * 100).toFixed(2)}%`)
+                            .style("left", (event.pageX + 5) + "px")
+                            .style("top", (event.pageY - 28) + "px");
+                    })
+                    .on("mouseout", function(d) {
+                        tooltip.transition()
+                            .duration(500)
+                            .style("opacity", 0);
+                    })
+                    .on("click", function(event, d) {
+                        const selectedData = data.filter(row => row.쿠폰상태 === d.data.쿠폰상태);
+                        updateTable(selectedData);
+                    });
+
+                arcEnter.append("text")
+                    .attr("dy", ".35em")
+                    .text(d => `${d.data.쿠폰상태}: ${(d.data.count / total * 100).toFixed(2)}%`)
+                    .attr("transform", d => `translate(${arc.centroid(d)})`)
+                    .style("text-anchor", "middle");
+
+                arcs.exit().remove();
+
+                arcs.select("path").attr("d", arc);
+                arcs.select("text")
+                    .text(d => `${d.data.쿠폰상태}: ${(d.data.count / total * 100).toFixed(2)}%`)
+                    .attr("transform", d => `translate(${arc.centroid(d)})`);
+            }
+
+            updateDonutChart();
+
+            // 쿠폰코드 filter 추가
+            const filterDiv = d3.select("#filterDiv");
+            const couponCodeFilter = filterDiv.select("select")
+                .on("change", function() {
+                    const selectedCouponCode = d3.select(this).property("value");
+                    updateDonutChart(selectedCouponCode);
+                });
+
+            couponCodeFilter.selectAll("option")
+                .data(["", ...new Set(data.map(d => d.쿠폰코드).sort())])
+                .enter()
+                .append("option")
+                .text(d => d);
+
+            // table chart 
+            const columns = ['월', '쿠폰코드', '고객지역', '쿠폰상태', 'ROI', '할인율', '평균금액', '고객ID', '가입기간'];
+            const table = d3.select("#table");
+            const thead = table.append("table").append("thead");
+            const tbody = table.append("table").append("tbody");
+
+            thead.append("tr")
+                .selectAll("th")
+                .data(columns)
+                .enter()
+                .append("th")
+                .html(d => `${d} <span class="sort-arrow">⇅</span>`)
+                .on("click", function(event, d) {
+                    const ascending = d3.select(this).attr("data-ascending") === "true";
+                    const sortedData = processedData.slice().sort((a, b) => {
+                        if (ascending) {
+                            return d3.ascending(a[d], b[d]);
+                        } else {
+                            return d3.descending(a[d], b[d]);
+                        }
+                    });
+                    d3.select(this).attr("data-ascending", !ascending);
+                    updateTable(sortedData);
+                });
+
+            function updateTable(data) {
+                tbody.selectAll("tr").remove();
+                const rows = tbody.selectAll("tr")
+                    .data(data.slice(0, 50))
+                    .enter()
+                    .append("tr");
+
+                rows.selectAll("td")
+                    .data(row => columns.map(column => row[column]))
+                    .enter()
+                    .append("td")
+                    .text(d => d);
+            }
+
+            updateTable(processedData.slice(0, 10));
+        }).catch(function (error) {
+            console.log("Error loading data:", error);
+        });
+    </script>
+</body>
+</html>
